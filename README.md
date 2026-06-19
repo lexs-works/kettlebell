@@ -157,3 +157,38 @@ related: { en: llm-as-dm, de: llm-as-dm }
 
 #### Что происходит с RSS при --post
 Просто пересобираем весь feed -- на ассемблере это доли секунд даже для 100 постов.
+
+### Сисколы для гири
+
+Системные вызовы Solaris для kettlebell
+|  №  |    Сискол	     |     Название	    |                     Назначение                         |
+|:----|:-----------------|:-----------------|:-------------------------------------------------------|
+| 3	  | SYS_read         | sys_read	        | Чтение .md файлов, шаблонов                            |
+| 4	  | SYS_write        | sys_write	    | Запись HTML, RSS, index.html                           |
+| 68  | SYS_openat       | sys_open	        | Открытие файлов (O_RDONLY, O_WRONLY	O_CREAT, O_RDWR) |
+| 6	  | SYS_close        | sys_close	    | Закрытие дескрипторов                                  |
+| 35  | SYS_statatfs     | sys_stat	        | Проверка существования файла (--force check)           |
+| 115 |	SYS_mmap	     | sys_mmap	        | Маппинг файлов в память (быстрый парсинг)              |
+| 117 |	SYS_munmap	     | sys_munmap	    | Освобождение памяти                                    |
+| 17  |	SYS_brk	         | sys_brk	        | Управление кучей (если не используем mmap)             |
+| 81  |	SYS_getdents     | sys_getdents     | Чтение директории src/{lang}/posts/*.md                |
+| 102 |	SYS_mkdirat	     | sys_mkdir	    | Создание build/ и поддиректорий                        |
+| 1	  | SYS_exit	     | sys_exit	        | Выход с кодом ошибки                                   |
+| 156 |	SYS_gettimeofday | sys_gettimeofday | Время для RSS lastBuildDate                            |
+
+Дополнительные вызовы для работы с директориями
+Для opendir/readdir используется SYS_getdents:
+
+```asm
+mov $78, %rax        # SYS_getdents
+mov $fd, %rdi        # дескриптор директории
+mov $buffer, %rsi    # буфер для dirent
+mov $1024, %rdx      # размер буфера
+syscall
+```
+
+### Рефы
+
+|                               |                                                                                                                                  |  
+|:------------------------------|:---------------------------------------------------------------------------------------------------------------------------------|
+| Номера сисколов Solaris 11.4  | /usr/include/sys/syscall.h (на Solaris)                                                                                          |
