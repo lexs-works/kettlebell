@@ -152,7 +152,194 @@ related: { en: llm-as-dm, de: llm-as-dm }
 
 Если related не указан — kettlebell пытается найти файл с тем же slug в другой языковой папке.
 
+### Логика kettlebell — архитектурная схема
 
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│                         MAIN                                    │
+├─────────────────────────────────────────────────────────────────┤
+│  1. Парсинг аргументов командной строки                         │
+│  2. Валидация комбинаций флагов                                 │
+│  3. Диспетчеризация в соответствующий режим                     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        ▼                     ▼                     ▼
+   ┌─────────┐          ┌──────────┐          ┌─────────┐
+   │ --new   │          │ --post   │          │ --lang  │
+   │ создать │          │ ген.     │          │ или     │
+   │ шаблон  │          │ 1 пост   │          │ полная  │
+   └─────────┘          └──────────┘          └─────────┘
+        │                     │                     │
+        ▼                     ▼                     ▼
+   ┌─────────┐          ┌──────────┐          ┌─────────┐
+   │ Генера- │          │ Проверка │          │ Обход   │
+   │ ция md  │          │ сущест-  │          │ языков  │
+   │ файлов  │          │ вования  │          │         │
+   └─────────┘          └──────────┘          └─────────┘
+                              │                     │
+                              ▼                     ▼
+                        ┌──────────┐          ┌─────────┐
+                        │ Парсинг  │          │ Обход   │
+                        │ фронт-   │          │ постов  │
+                        │ материи  │          │ в языке │
+                        └──────────┘          └─────────┘
+                              │                     │
+                              └──────────┬──────────┘
+                                         ▼
+                              ┌─────────────────────┐
+                              │ Генерация HTML:     │
+                              │ - подстановка мета  │
+                              │ - подстановка config│
+                              │ - кросс-ссылки      │
+                              └─────────────────────┘
+                                         │
+                                         ▼
+                              ┌──────────────────────┐
+                              │ Обновление RSS:      │
+                              │ - пересборка feed.xml│
+                              │ - сортировка по дате │
+                              └──────────────────────┘
+                                         │
+                                         ▼
+                              ┌──────────────────────┐
+                              │ Обновление index.html│
+                              │ (список постов)      │
+                              └──────────────────────┘
+```
+
+#### Режимы работы (диспетчеризация)
+
+**Режим 1: ```--new <slug>```**
+```text
+--new last-bastion
+
+Действие:
+1. Проверить, что slug корректен (буквы, цифры, дефис)
+2. Для каждого языка (ru, en, de):
+   - Создать файл src/{lang}/posts/current-date-{slug}.md
+   - Заполнить шаблоном с frontmatter
+3. Вывести список созданных файлов
+4. Exit(0)
+```
+
+Шаблон нового поста:
+```markdown
+---
+title: TITLE_PLACEHOLDER
+description: DESCRIPTION_PLACEHOLDER
+lang: {lang}
+slug: {slug}
+related: { ru: {slug}, en: {slug}, de: {slug} }
+---
+
+Напишите текст здесь.
+```
+
+**Режим 2: ```--post {lang}/{slug}```**
+```text
+--post ru/new-idea
+
+Действие:
+1. Проверить формат (должен быть "/" внутри)
+2. Извлечь lang и slug
+3. Сформировать путь src/{lang}/posts/{slug}.md
+4. Если файла нет → Error: source file not found
+5. Если файл есть → вызвать generate_one_post(lang, slug, force_flag)
+6. Если force_flag == 0 и build/{lang}/posts/{slug}.html существует → Error: already exists
+7. Если force_flag == 1 → перезаписать
+8. После генерации поста → обновить RSS для этого языка
+9. После RSS → обновить index.html для этого языка
+```
+
+**Режим 3: ```--lang {lang}``` (с опциональным ```--force```)**
+```text
+--lang ru --force
+
+Действие:
+1. Валидировать lang (должен быть ru/en/de)
+2. Если --clean указан → удалить build/{lang}/
+3. Обойти директорию src/{lang}/posts/*.md
+4. Для каждого поста:
+   - Вызвать generate_one_post(lang, slug, force_flag)
+5. После всех постов → сгенерировать RSS для языка
+6. Сгенерировать index.html для языка
+```
+
+**Режим 4: Полная сборка (без флагов)**
+```text
+./kettlebell
+
+Действие:
+1. Для каждого языка (ru, en, de):
+   - Обойти src/{lang}/posts/*.md
+   - Для каждого поста:
+        - если force_flag == 0 и файл существует в build → пропустить
+        - иначе → сгенерировать
+2. После всех постов → сгенерировать RSS для всех языков
+3. Сгенерировать index.html для всех языков
+4. Скопировать assets/ → build/assets/
+```
+
+#### Структура данных в памяти
+```asm
+post:
+    .title         string
+    .description   string
+    .lang          string (ru/en/de)
+    .slug          string
+    .date          string (YYYY-MM-DD)
+    .related_ru    string
+    .related_en    string
+    .related_de    string
+    .content       string (HTML после парсинга)
+    
+config:
+    .site_url      string
+    .bot_name      string
+    .threema_id    string
+    .support_email string
+```
+
+#### Псевдокод основного цикла
+```c
+int main(int argc, char **argv) {
+    parse_args(argc, argv);
+    validate_flags();
+    load_config();
+    
+    if (mode_new) {
+        create_post_template(slug);
+        exit(0);
+    }
+    
+    if (mode_clean && !mode_force) {
+        error("--clean requires --force");
+        exit(1);
+    }
+    
+    if (mode_post) {
+        if (!file_exists(source_path)) error("source not found");
+        if (!mode_force && file_exists(build_path)) error("already exists");
+        generate_one_post(lang, slug, mode_force);
+        update_rss_for_lang(lang);
+        update_index_for_lang(lang);
+        exit(0);
+    }
+    
+    if (mode_lang) {
+        if (mode_clean) remove_build_dir(lang);
+        process_language(lang, mode_force);
+        exit(0);
+    }
+    
+    // full build
+    if (mode_clean) remove_build_dir("all");
+    process_all_languages(mode_force);
+    copy_assets();
+    exit(0);
+}
+```
 
 
 #### Что происходит с RSS при --post
